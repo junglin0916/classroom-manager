@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Multi-Class Learning Manager</title>
+  <title>Multi-Class Learning Manager (Cloud Synced)</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- React & ReactDOM CDN -->
@@ -17,19 +17,22 @@
     const e = React.createElement;
     const { useState, useEffect, useRef } = React;
 
+    // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE:
+    const GOOGLE_SHEET_URL = "YOUR_PASTED_WEB_APP_URL_HERE";
+
     const INITIAL_CLASSES_DATA = {
       'c101': {
-        name: 'Class 705',
+        name: 'Class 701',
         groups: [
           { id: 'g1', name: 'Group Alpha', members: [{ id: 's1', seatNo: 1, name: 'Alice', points: 0 }, { id: 's2', seatNo: 2, name: 'Bob', points: 0 }] },
           { id: 'g2', name: 'Group Beta', members: [{ id: 's3', seatNo: 3, name: 'Charlie', points: 0 }] }
         ],
         logs: []
       },
-      'c102': { name: 'Class 805', groups: [], logs: [] },
-      'c103': { name: 'Class 806', groups: [], logs: [] },
-      'c104': { name: 'Class 807', groups: [], logs: [] },
-      'c105': { name: 'Class 808', groups: [], logs: [] }
+      'c102': { name: 'Class 702', groups: [], logs: [] },
+      'c103': { name: 'Class 703', groups: [], logs: [] },
+      'c104': { name: 'Class 704', groups: [], logs: [] },
+      'c105': { name: 'Class 705', groups: [], logs: [] }
     };
 
     const INITIAL_CATEGORIES = [
@@ -40,7 +43,7 @@
     ];
 
     function GroupClassroomManager() {
-      const MASTER_PASSWORD = "mysecretpassword"; // Set your password here
+      const MASTER_PASSWORD = "mysecretpassword";
       const START_HOUR = 8;
       const END_HOUR = 17;
 
@@ -60,6 +63,7 @@
       const [isAuthenticated, setIsAuthenticated] = useState(false);
       const [isTimeAllowed, setIsTimeAllowed] = useState(false);
       const [timeStatusMessage, setTimeStatusMessage] = useState('');
+      const [syncStatus, setSyncStatus] = useState('Cloud Ready');
 
       const [newGroupName, setNewGroupName] = useState('');
       const [selectedGroupId, setSelectedGroupId] = useState('');
@@ -86,13 +90,52 @@
 
       const activeClass = classesData[selectedClassId] || { name: 'Class', groups: [], logs: [] };
 
-      useEffect(() => {
-        localStorage.setItem('GCM_CLASSES_DATA', JSON.stringify(classesData));
-      }, [classesData]);
+      // --- SYNC TO GOOGLE SHEETS & LOCALSTORAGE ---
+      const saveStateToCloud = async (updatedClasses, updatedCategories) => {
+        const payload = {
+          classesData: updatedClasses || classesData,
+          categories: updatedCategories || categories
+        };
 
+        localStorage.setItem('GCM_CLASSES_DATA', JSON.stringify(payload.classesData));
+        localStorage.setItem('GCM_CATEGORIES', JSON.stringify(payload.categories));
+
+        if (GOOGLE_SHEET_URL && GOOGLE_SHEET_URL !== "https://script.google.com/a/macros/mail.scljh.tc.edu.tw/s/AKfycbxBQ_kjAKKP5DLYVYZnbrFiQeRnTPHzzZXRdasgMoHfbrUbfjIzij-O-jYtS5rLfMMK/exec") {
+          setSyncStatus('Syncing to Google Sheets...');
+          try {
+            await fetch(GOOGLE_SHEET_URL, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            setSyncStatus('☁️ Cloud Synced');
+          } catch(err) {
+            setSyncStatus('⚠️ Sync Failed (Saved Locally)');
+          }
+        }
+      };
+
+      // Load from Cloud on Initial Mount
       useEffect(() => {
-        localStorage.setItem('GCM_CATEGORIES', JSON.stringify(categories));
-      }, [categories]);
+        const loadFromCloud = async () => {
+          if (GOOGLE_SHEET_URL && GOOGLE_SHEET_URL !== "YOUR_PASTED_WEB_APP_URL_HERE") {
+            try {
+              setSyncStatus('Loading Cloud Data...');
+              const res = await fetch(GOOGLE_SHEET_URL);
+              const data = await res.json();
+              if (data && data.classesData) {
+                setClassesData(data.classesData);
+                setCategories(data.categories || INITIAL_CATEGORIES);
+                setSyncStatus('☁️ Cloud Loaded');
+              }
+            } catch(err) {
+              setSyncStatus('Loaded Local Data');
+            }
+          }
+        };
+        loadFromCloud();
+      }, []);
 
       useEffect(() => {
         if (activeClass.groups && activeClass.groups.length > 0) {
@@ -179,18 +222,16 @@
         setIsNoiseAlert(false);
       };
 
-      // --- EDITING & DELETION ACTIONS ---
       const addGroup = () => {
         if (!canEdit) return alert('Editing is disabled!');
         if (!newGroupName.trim()) return;
         const newGroup = { id: 'g_' + Date.now(), name: newGroupName, members: [] };
-        setClassesData({
+        const updated = {
           ...classesData,
-          [selectedClassId]: {
-            ...activeClass,
-            groups: [...activeClass.groups, newGroup]
-          }
-        });
+          [selectedClassId]: { ...activeClass, groups: [...activeClass.groups, newGroup] }
+        };
+        setClassesData(updated);
+        saveStateToCloud(updated, categories);
         setNewGroupName('');
       };
 
@@ -198,10 +239,9 @@
         if (!canEdit) return alert('Editing is disabled!');
         if (confirm('Delete this group and all its members?')) {
           const updatedGroups = activeClass.groups.filter(g => g.id !== groupId);
-          setClassesData({
-            ...classesData,
-            [selectedClassId]: { ...activeClass, groups: updatedGroups }
-          });
+          const updated = { ...classesData, [selectedClassId]: { ...activeClass, groups: updatedGroups } };
+          setClassesData(updated);
+          saveStateToCloud(updated, categories);
         }
       };
 
@@ -214,74 +254,62 @@
           ...g, members: [...g.members, { id: 's_' + Date.now(), seatNo: seat, name: newStudentName, points: 0 }]
         } : g);
 
-        setClassesData({
-          ...classesData,
-          [selectedClassId]: { ...activeClass, groups: updatedGroups }
-        });
+        const updated = { ...classesData, [selectedClassId]: { ...activeClass, groups: updatedGroups } };
+        setClassesData(updated);
+        saveStateToCloud(updated, categories);
         setNewStudentName('');
         setNewSeatNo('');
       };
 
       const deleteStudent = (studentId) => {
         if (!canEdit) return alert('Editing is disabled!');
-        const updatedGroups = activeClass.groups.map(g => ({
-          ...g,
-          members: g.members.filter(s => s.id !== studentId)
-        }));
-        setClassesData({
-          ...classesData,
-          [selectedClassId]: { ...activeClass, groups: updatedGroups }
-        });
+        const updatedGroups = activeClass.groups.map(g => ({ ...g, members: g.members.filter(s => s.id !== studentId) }));
+        const updated = { ...classesData, [selectedClassId]: { ...activeClass, groups: updatedGroups } };
+        setClassesData(updated);
+        saveStateToCloud(updated, categories);
       };
 
       const addCategory = () => {
         if (!canEdit) return alert('Editing is disabled!');
         if (!newCatName.trim()) return;
         const pts = newCatType === 'bad' ? -Math.abs(Number(newCatPoints)) : Math.abs(Number(newCatPoints));
-        setCategories([...categories, { id: 'c_' + Date.now(), name: newCatName, type: newCatType, defaultPoints: pts }]);
+        const updatedCats = [...categories, { id: 'c_' + Date.now(), name: newCatName, type: newCatType, defaultPoints: pts }];
+        setCategories(updatedCats);
+        saveStateToCloud(classesData, updatedCats);
         setNewCatName('');
       };
 
       const deleteCategory = (catId) => {
         if (!canEdit) return alert('Editing is disabled!');
-        setCategories(categories.filter(c => c.id !== catId));
+        const updatedCats = categories.filter(c => c.id !== catId);
+        setCategories(updatedCats);
+        saveStateToCloud(classesData, updatedCats);
       };
 
       const handleFastPasteStudents = () => {
         if (!canEdit) return alert('Editing is disabled!');
         if (!batchNames.trim() || !selectedGroupId) return;
         const lines = batchNames.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        
-        // Existing student count for seat auto-numbering
         const totalExisting = activeClass.groups.flatMap(g => g.members).length;
 
         const newMembers = lines.map((line, index) => {
-          // Check if line starts with a number (e.g., "1 Alice" or "01, Alice")
           const match = line.match(/^(\d+)[\s,.-]+(.+)/);
           let seatNo = totalExisting + index + 1;
           let name = line;
-
           if (match) {
             seatNo = Number(match[1]);
             name = match[2].trim();
           }
-
-          return {
-            id: 's_' + Date.now() + '_' + index,
-            seatNo: seatNo,
-            name: name,
-            points: 0
-          };
+          return { id: 's_' + Date.now() + '_' + index, seatNo: seatNo, name: name, points: 0 };
         });
 
         const updatedGroups = activeClass.groups.map(g => g.id === selectedGroupId ? {
           ...g, members: [...g.members, ...newMembers]
         } : g);
 
-        setClassesData({
-          ...classesData,
-          [selectedClassId]: { ...activeClass, groups: updatedGroups }
-        });
+        const updated = { ...classesData, [selectedClassId]: { ...activeClass, groups: updatedGroups } };
+        setClassesData(updated);
+        saveStateToCloud(updated, categories);
         setBatchNames('');
       };
 
@@ -299,7 +327,9 @@
           if (type === 'good' && points < 0) points = Math.abs(points);
           if (name) newCats.push({ id: 'c_' + Date.now() + '_' + idx, name, type, defaultPoints: points });
         });
-        setCategories([...categories, ...newCats]);
+        const updatedCats = [...categories, ...newCats];
+        setCategories(updatedCats);
+        saveStateToCloud(classesData, updatedCats);
         setBatchCategories('');
       };
 
@@ -330,14 +360,12 @@
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
 
-        setClassesData({
+        const updated = {
           ...classesData,
-          [selectedClassId]: {
-            ...activeClass,
-            groups: updatedGroups,
-            logs: [newLog, ...(activeClass.logs || [])]
-          }
-        });
+          [selectedClassId]: { ...activeClass, groups: updatedGroups, logs: [newLog, ...(activeClass.logs || [])] }
+        };
+        setClassesData(updated);
+        saveStateToCloud(updated, categories);
         setLogNote('');
       };
 
@@ -351,7 +379,8 @@
                 onChange: (ev) => setSelectedClassId(ev.target.value),
                 className: 'text-xl font-bold bg-slate-100 text-indigo-900 border border-slate-300 rounded-lg px-3 py-1.5 mt-0.5 focus:ring-2 focus:ring-indigo-500'
               }, Object.keys(classesData).map(cid => e('option', { key: cid, value: cid }, classesData[cid].name)))
-            )
+            ),
+            e('span', { className: 'text-xs bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full border border-indigo-200 font-semibold self-end mb-1' }, syncStatus)
           ),
           e('div', { className: 'flex items-center gap-4 bg-slate-100 p-3 rounded-lg border border-slate-200' },
             e('span', { className: 'text-sm font-semibold' }, 'Noise Detector'),
